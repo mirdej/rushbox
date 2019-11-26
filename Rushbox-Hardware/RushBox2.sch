@@ -1192,7 +1192,7 @@ Text Label 8550 3600 2    50   ~ 0
 zoom_A
 Text Label 8550 3500 2    50   ~ 0
 zoom_B
-Text Label 8550 4650 2    50   ~ 0
+Text Label 8550 4750 2    50   ~ 0
 menu_B
 Text Label 8550 4550 2    50   ~ 0
 menu_A
