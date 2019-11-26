@@ -1174,11 +1174,11 @@ Text Label 4400 4150 2    50   ~ 0
 enter
 Text Label 8550 3200 2    50   ~ 0
 hue_A
-Text Label 8550 3100 2    50   ~ 0
+Text Label 8000 3100 2    50   ~ 0
 hue_B
-Text Label 8550 3400 2    50   ~ 0
-sat_A
 Text Label 8550 3300 2    50   ~ 0
+sat_A
+Text Label 8550 3400 2    50   ~ 0
 sat_B
 Text Label 8550 3700 2    50   ~ 0
 white_A
@@ -3299,4 +3299,28 @@ Text Label 12400 5200 2    50   ~ 0
 cs
 Text Label 12400 3200 2    50   ~ 0
 cs
+$Comp
+L Device:R R?
+U 1 1 5DDEFAA7
+P 8000 2950
+F 0 "R?" H 7930 2904 50  0000 R CNN
+F 1 "4k7" H 7930 2995 50  0000 R CNN
+F 2 "Resistor_SMD:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder" V 7930 2950 50  0001 C CNN
+F 3 "~" H 8000 2950 50  0001 C CNN
+	1    8000 2950
+	1    0    0    1   
+$EndComp
+$Comp
+L power:+3V3 #PWR?
+U 1 1 5DDF56C8
+P 8000 2800
+F 0 "#PWR?" H 8000 2650 50  0001 C CNN
+F 1 "+3V3" V 8015 2928 50  0000 L CNN
+F 2 "" H 8000 2800 50  0001 C CNN
+F 3 "" H 8000 2800 50  0001 C CNN
+	1    8000 2800
+	1    0    0    -1  
+$EndComp
+Wire Wire Line
+	8550 3100 8000 3100
 $EndSCHEMATC
