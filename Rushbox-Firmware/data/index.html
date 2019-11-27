@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta http-equiv="content-type" content="text/html; charset=utf-8"> <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"> <link rel="stylesheet" href="src/bootstrap.min.css"> <script src="src/jquery-3.4.1.min.js"></script> <script src="src/bootstrap.bundle.min.js"></script> 
+		<title>
+			Rushbox Configuration 
+		</title>
+		 <script>
+    function submitMessage() {
+     setTimeout(function(){ document.location.reload(false); }, 1000);   
+    }
+  </script>
+	</head>
+	<body>
+		<div class="container">
+			<h1 class="text-center">
+				RushBox v2.0 by [&nbsp;a&nbsp;n&nbsp;y&nbsp;m&nbsp;a&nbsp;] 
+			</h1>
+			<p>
+				Configuration 
+			</p>
+			<div class="container ">
+				<form action="get" target="hidden-form">
+					<div class="form-group row">
+						<label for="hostname" class="col-sm-2 col-form-label">
+							Hostname 
+						</label>
+						<div class="col-sm-3">
+							<input type="text" name="HostName" class="form-control" id="hostname" placeholder="hostname" value="%HOSTNAME%" required> 
+						</div>
+						<div class="col-sm-2">
+							.local 
+						</div>
+						<button type="submit" class="col-sm-2 btn btn-primary" onclick="submitMessage()">
+							Save 
+						</button>
+						<div class="invalid-feedback">
+							Cannot be empty 
+						</div>
+					</div>
+				</form>
+				<form action="get" target="hidden-form">
+									<div class="form-group row">
+
+						<label for="restart" class="col-sm-2 col-form-label">
+							Restart: 
+						</label>
+						<div class="col-sm-5">
+							<input type="text" name="ReStart" readonly class="form-control-plaintext " id="restart" placeholder="" value="" > 
+						</div>
+						<button type="submit" class="col-sm-2 btn btn-primary" onclick="submitMessage()">
+							Restart 
+						</button>
+					</div>
+				</form>
+		
+				  <iframe class="text-warning" name="hidden-form"></iframe>
+
+			</div>
+		</div>
+	</body>
+	 
+</html>
