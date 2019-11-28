@@ -25,8 +25,10 @@
 #include "ESPAsyncWebServer.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <Adafruit_NeoPixel.h>
+#include <FastLED.h>
 #include <ESP32Encoder.h>
+#include <LXESP32DMX.h>
+#include "RushWash.h"
 
 // ..................................................................................... PIN mapping
 
@@ -38,6 +40,17 @@ const int PIN_ENCODERS[]    = {26,27,35,32,33,25,14,12,3,1,15,4};
 const int PIN_CS            = 5;
 
 const int NUM_PIXELS    =   26;
+
+// ..................................................................................... Constants
+
+const int MODE_UNKNOWN  = 0;
+const int MODE_FIXTURE  = 1;
+const int MODE_SCENE    = 2;
+const int MODE_TEST     = 3;
+
+
+
+
 // ..................................................................................... SCREEN
 
 
@@ -56,14 +69,44 @@ String hostname;
 Preferences                             preferences;
 Timer                                   t;
 AsyncWebServer                          server(80);
-Adafruit_NeoPixel 						pixels = Adafruit_NeoPixel(NUM_PIXELS, PIN_PIXELS, NEO_GRB + NEO_KHZ800);
+CRGB                                    pixels[NUM_PIXELS];
 ESP32Encoder                            encoder;
+
+RushWash                fixture;
+
 int                     buttons_raw;
 signed int              test;
 
+char                    mode;
+int                     selected_fixture;
+int                     selected_bank;
+int                     selected_scene;
+
+float master = 1.;
+
 //----------------------------------------------------------------------------------------
 //																		pushbuttons
+void btn_press_copy(){
+    Serial.println("Copy");
+}
+
+void btn_press_delete(){
+    Serial.println("Delete");
+}
+
+
+void btn_press_start(){
+    Serial.println("Start");
+}
+
+
+void btn_press_enter(){
+    Serial.println("Enter");
+}
+
+
 void check_buttons(){
+    static long old_buttons;
     SPI.beginTransaction(SPISettings(80000, MSBFIRST, SPI_MODE0));
     digitalWrite(PIN_CS,LOW);
     delay(1);
@@ -71,9 +114,68 @@ void check_buttons(){
     buttons_raw = SPI.transfer(0x00) << 8;
     buttons_raw |= SPI.transfer(0x00);
     SPI.endTransaction();
+    if (buttons_raw == old_buttons) return;
+
+    if (buttons_raw >> 13 & 1) mode = MODE_FIXTURE;
+    else mode = MODE_SCENE;
+    
+    long triggers = old_buttons & ~buttons_raw;
+    old_buttons = buttons_raw;
+    if (triggers == 0) return;
+    
+    //Serial.println(triggers,BIN);
+    //Serial.print("Triggers: ");
+    for (int i = 0; i < 13; i++) {
+        if (triggers & (1 << i)) {
+             Serial.print(i);             Serial.print(" ");
+             if (i > 0 && i < 9) {
+                 if (mode == MODE_FIXTURE) {
+                    selected_fixture = i-1;
+                 } else if (mode == MODE_SCENE) {
+                     selected_scene = i-1;
+                 }
+            }
+            if (i == 11) btn_press_copy();
+            if (i == 12) btn_press_delete();
+            if (i == 10) btn_press_start();
+            if (i == 9) btn_press_enter();
+        }
+    }
+    Serial.println();
+    
+}
+//----------------------------------------------------------------------------------------
+//																		pixels
+void update_pixels() { 
+    if (mode == MODE_FIXTURE || mode == MODE_SCENE) {
+        FastLED.clear();
+
+        if (mode == MODE_FIXTURE) {
+            pixels[7-selected_fixture] = CRGB::Gainsboro; 
+            pixels[8+selected_fixture] = CRGB::Gainsboro; 
+        
+            for (int i = 16; i < 21; i++){
+                pixels[i] = CRGB::Gold; 
+            }
+        
+        }
+    
+        if (mode == MODE_SCENE) {
+            pixels[7-selected_scene] = CRGB::Gainsboro; 
+            pixels[8+selected_scene] = CRGB::Gainsboro; 
+        
+            for (int i = 21; i < NUM_PIXELS; i++){
+                pixels[i] = CRGB::Gold; 
+            }
+
+        }
+    
+        FastLED.show();
+    }
 }
 
-
+//----------------------------------------------------------------------------------------
+//																		encoders
 void check_encoder(){
     static int last_line = 5000;
     char dir = encoder.getCount() > 0;
@@ -189,17 +291,16 @@ void restart() {
 //----------------------------------------------------------------------------------------
 //																		harware test
 void hardware_test() {
-
+    if (mode != MODE_TEST) return;
+    
     const int TEST_AD = 1;
-    const int TEST_ENC_PINS = 0;
+    const int TEST_ENC_PINS = 1;
     const int TEST_ENCOODER_0 = 0;
     const int TEST_PIXELS = 1;
     const int TEST_BUTTONS = 1;
-	long last_update = millis();
-	long start_test = millis();
-	int pix_idx;
-
-	while(1) {
+	static long last_update;
+	static long start_test = millis();
+	static xint pix_idx;
 	
 	 	display.clearDisplay();
 	    display.setTextSize(1);				
@@ -245,21 +346,30 @@ void hardware_test() {
         }
                 
     	display.display();
-	    delay(100);
+    	
 	    if (TEST_PIXELS) {
             if ((millis() - last_update) > 100) {
                 last_update = millis();
                 for (int i = 0; i < NUM_PIXELS; i++){
-                    pixels.setPixelColor(i, pixels.Color(0,0,10)); 
+                    pixels[i] = CRGB( 0, 0, 20);
                 }
-                pixels.setPixelColor(pix_idx, pixels.Color(100,0,0)); 
-                pixels.show();
+               pixels[pix_idx] = CRGB(100,0,0); 
+                FastLED.show();
                 pix_idx++;
                 pix_idx %= NUM_PIXELS;
             }
         }
-	}
+
 }
+//========================================================================================
+//----------------------------------------------------------------------------------------
+//																				service dmx
+
+void service() {
+    fixture.update(master);
+    update_pixels();
+}
+
 
 //========================================================================================
 //----------------------------------------------------------------------------------------
@@ -269,15 +379,7 @@ void setup(){
 	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 	display.setRotation(2); 
 
-	pixels.begin(); 
-	pixels.setBrightness(60);
-	
-    for (int i = 0; i < NUM_PIXELS; i++){
-        pixels.setPixelColor(i, pixels.Color(0,0,0)); 
-    }
-	pixels.show();
-	delay(100);
-	pixels.show();
+    FastLED.addLeds<NEOPIXEL, PIN_PIXELS>(pixels, NUM_PIXELS);
 	    
     for (int i = 0; i < 12; i++) {
         pinMode(PIN_ENCODERS[i],INPUT_PULLUP);
@@ -288,8 +390,6 @@ void setup(){
     pinMode(PIN_CS, OUTPUT);
     digitalWrite(PIN_CS,HIGH);
     SPI.begin();
-
-    hardware_test();
     
  	display.clearDisplay();
 	display.setTextSize(1);				
@@ -320,11 +420,17 @@ void setup(){
     }
  
     preferences.begin("changlier", false);
-    //hostname = readFile(SPIFFS, "/hostname.txt");
+
     hostname = preferences.getString("hostname");
     if (hostname == String()) { hostname = "changlier"; }
     Serial.print("Hostname: ");
     Serial.println(hostname);
+
+    fixture.setAddress(preferences.getInt("address1"));
+    Serial.print("DMX Address: ");
+    Serial.println(hostname);
+
+
 	preferences.end();
 
  
@@ -390,7 +496,10 @@ void setup(){
             } else if (request->hasParam("ReStart")) {
                 request->send(200, "text/text", "Restarting...");
                 restart();
-            } else {
+            } else if (request->hasParam("HardwareTest")) {
+                request->send(200, "text/text", "Running Hardware test...");
+                mode = MODE_TEST;
+            }else {
                 inputMessage = "No message sent";
             }
             Serial.println(inputMessage);
@@ -400,9 +509,13 @@ void setup(){
         server.begin();
     }
     
-    
-    t.every(100,check_encoder);
+    t.every(10, check_buttons);    
+    t.every(25, service);    
+//    t.every(100,check_encoder);
+    t.every(100, hardware_test);
 }
+
+
 
 //========================================================================================
 //----------------------------------------------------------------------------------------
