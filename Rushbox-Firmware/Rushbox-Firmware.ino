@@ -63,6 +63,7 @@ Adafruit_SSD1306 		display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define WIFI_TIMEOUT		4000
 String hostname;
 
+
 //========================================================================================
 //----------------------------------------------------------------------------------------
 //																				GLOBALS
@@ -76,8 +77,10 @@ RushWash                fixture;
 
 int                     buttons_raw;
 signed int              test;
+	char buf[] = "Hello this is an empty message with, a comma in it";
 
 char                    mode;
+int 					fixture_count;
 int                     selected_fixture;
 int                     selected_bank;
 int                     selected_scene;
@@ -131,6 +134,7 @@ void check_buttons(){
              if (i > 0 && i < 9) {
                  if (mode == MODE_FIXTURE) {
                     selected_fixture = i-1;
+                    selected_fixture %= fixture_count;
                  } else if (mode == MODE_SCENE) {
                      selected_scene = i-1;
                  }
@@ -175,6 +179,46 @@ void update_pixels() {
 }
 
 //----------------------------------------------------------------------------------------
+//																		LEE
+
+void lee(int i) {
+    display.clearDisplay();
+	display.setCursor(0,0);
+	display.setTextWrap(false);
+    display.setTextSize(1);
+    display.print("LEE");
+   // display.drawLine(0, 31, test/2, 20, WHITE);
+
+	File file = SPIFFS.open("/lee2rgb.csv", "r");
+	if(!file || file.isDirectory()){
+	  Serial.println("- empty file or failed to open file");
+	}
+	int line = 0;
+	while(file.available()){
+		if (line == i) {
+			display.setTextSize(2);
+			display.setCursor(0,14);    // number
+			display.print(file.readStringUntil(','));
+			display.setTextSize(1);
+			display.setCursor(40,12); // name
+			display.println(file.readStringUntil(','));
+			display.setCursor(40,22); // r
+			display.print(file.readStringUntil(','));
+			 display.print( " ");   	    	// g
+			display.print(file.readStringUntil(','));
+			 display.print( " "); // b
+			display.print(file.readStringUntil('\n'));
+			line++;
+	   } else {
+		file.readStringUntil('\n');
+		line++;
+	   }
+	}
+	Serial.println();
+	file.close();
+	display.display();
+}
+//----------------------------------------------------------------------------------------
 //																		encoders
 void check_encoder(){
     static int last_line = 5000;
@@ -191,43 +235,8 @@ void check_encoder(){
     encoder.setCount(0);
 	if (test != last_line) {
         last_line = test;
-        display.clearDisplay();
-	display.setCursor(0,0);
-	display.setTextWrap(false);
-    display.setTextSize(1);
-    display.print("LEE");
-   // display.drawLine(0, 31, test/2, 20, WHITE);
-
-        File file = SPIFFS.open("/lee2rgb.csv", "r");
-        if(!file || file.isDirectory()){
-          Serial.println("- empty file or failed to open file");
-        }
-        int line = 0;
-        while(file.available()){
-            if (line == test) {
-                display.setTextSize(2);
-    	    	display.setCursor(0,14);    // number
-                display.print(file.readStringUntil(','));
-                display.setTextSize(1);
-    	    	display.setCursor(40,12); // name
-                display.println(file.readStringUntil(','));
-    	    	display.setCursor(40,22); // r
-                display.print(file.readStringUntil(','));
-                 display.print( " ");   	    	// g
-                display.print(file.readStringUntil(','));
-    	    	 display.print( " "); // b
-                display.print(file.readStringUntil('\n'));
-                line++;
-           } else {
-            file.readStringUntil('\n');
-            line++;
-           }
-        }
-        Serial.println();
-        file.close();
-    }
-    display.display();
-
+		lee(test);
+	}
 }
  
 //----------------------------------------------------------------------------------------
@@ -272,6 +281,11 @@ String processor(const String& var){
   if(var == "HOSTNAME"){
         return hostname;
     }
+  if(var == "FIXT_ADDRESS"){
+     	preferences.begin("changlier", false);
+		String rep = preferences.getString("fixtures");
+        return  rep;
+    }
   return String();
 }
 
@@ -300,7 +314,7 @@ void hardware_test() {
     const int TEST_BUTTONS = 1;
 	static long last_update;
 	static long start_test = millis();
-	static xint pix_idx;
+	static int pix_idx;
 	
 	 	display.clearDisplay();
 	    display.setTextSize(1);				
@@ -361,6 +375,46 @@ void hardware_test() {
         }
 
 }
+
+String string_to_addresses(String  input) {
+	int addr;
+	char *token;
+	String  response;
+	Serial.println(input);
+	const char s[2] = ",";
+	strcpy(buf,input.c_str());
+
+	/* get the first token */
+	token = strtok(buf, s);
+	int i = 0;
+	/* walk through other tokens */
+	while( token != NULL ) {
+		// printf( " %s\n", token );
+		addr = atoi(token);
+		response += addr;
+		response += ",";
+		
+		Serial.print("Fixture ");
+		Serial.print(i,DEC);
+		Serial.print(" ");
+		Serial.println(addr,DEC);
+		token = strtok(NULL, s);
+		i++;
+		if (i > 7) break;
+	}
+
+	response.remove(response.length()-1,1);
+	fixture_count = i;
+	Serial.print("Number of fixtures:" );
+	Serial.println(fixture_count);
+	Serial.println(response);
+
+    preferences.begin("changlier", false);
+	preferences.putString("fixtures",response);
+
+	return response;
+}
+
 //========================================================================================
 //----------------------------------------------------------------------------------------
 //																				service dmx
@@ -376,6 +430,7 @@ void service() {
 //																				SETUP
 
 void setup(){
+
 	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 	display.setRotation(2); 
 
@@ -426,12 +481,7 @@ void setup(){
     Serial.print("Hostname: ");
     Serial.println(hostname);
 
-    fixture.setAddress(preferences.getInt("address1"));
-    Serial.print("DMX Address: ");
-    Serial.println(hostname);
-
-
-	preferences.end();
+	string_to_addresses(preferences.getString("fixtures"));
 
  
     WiFi.begin(ssid, pwd);
@@ -468,7 +518,40 @@ void setup(){
         server.on("/src/bootstrap.min.css", HTTP_GET, [](AsyncWebServerRequest *request){
             request->send(SPIFFS, "/src/bootstrap.min.css", "text/css");
         });
+
+        server.on("/rc/bootstrap4-toggle.min.js", HTTP_GET, [](AsyncWebServerRequest *request){
+            request->send(SPIFFS, "rc/bootstrap4-toggle.min.js", "text/javascript");
+        });
+
+        server.on("/src/bootstrap4-toggle.min.css", HTTP_GET, [](AsyncWebServerRequest *request){
+            request->send(SPIFFS, "/src/bootstrap4-toggle.min.css", "text/css");
+        });
  
+ 
+       server.on("/set", HTTP_GET, [] (AsyncWebServerRequest *request) {
+            String inputMessage;
+                        
+            inputMessage = "No message sent";
+            //List all parameters
+            int params = request->params();
+            for(int i=0;i<params;i++){
+              AsyncWebParameter* p = request->getParam(i);
+              if(p->isFile()){ //p->isPost() is also true
+                Serial.printf("FILE[%s]: %s, size: %u\n", p->name().c_str(), p->value().c_str(), p->size());
+              } else if(p->isPost()){
+                Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
+              } else {
+                Serial.printf("GET[%s]: %s\n", p->name().c_str(), p->value().c_str());
+              }
+            }
+            
+        	if (request->hasParam("addresses")) {
+                	inputMessage = request->getParam("addresses")->value();
+                   	request->send(200, "text/text", string_to_addresses(inputMessage));
+            }
+
+        });
+
          server.on("/get", HTTP_GET, [] (AsyncWebServerRequest *request) {
             String inputMessage;
                         
