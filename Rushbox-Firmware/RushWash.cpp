@@ -105,6 +105,7 @@ void RushWash::setColor(rgbw_t color) {
 	
 	actual_state.color = color;
 	free(hsvf);
+	unsetVirgin();
 }
 
 //----------------------------------------------------------------------------------------
@@ -129,15 +130,19 @@ void RushWash::init() {
 	actual_state.ptz.zoom = 1.;
 	actual_state.ptz.tilt = 0.5;
 	actual_state.ptz.pan = 0.5;
-	actual_state.color.white = 0.0;
-	actual_state.color.red = .5;
-	actual_state.color.green = .5;
-	actual_state.color.blue = .5;
+	actual_state.color.white = 0.35;
+	actual_state.color.red = .0;
+	actual_state.color.green = .0;
+	actual_state.color.blue = .0;
 	actual_state.dim = 1;
 	actual_state.lee_filter = 0;
+	is_virgin = 1;
 	setColor(actual_state.color);
 }
 
+void RushWash::unsetVirgin() {
+			if (is_virgin) {actual_state.color.white = 0.; is_virgin = 0;}
+}
 //----------------------------------------------------------------------------------------
 
 void RushWash::handleEncoder(int enc_zoom, int enc_hue, int enc_sat, int enc_white, int enc_dim) {
@@ -158,16 +163,19 @@ void RushWash::handleEncoder(int enc_zoom, int enc_hue, int enc_sat, int enc_whi
 		if (enc_hue != 0 ) {
 			actual_state.color.red += enc_map(enc_hue);
 			actual_state.color.red = clip(actual_state.color.red,0.,1.);
+			unsetVirgin();
 		}
 	
 		if (enc_sat != 0 ) {
 			actual_state.color.green += enc_map(enc_sat);
 			actual_state.color.green = clip(actual_state.color.green,0.,1.);
+			unsetVirgin();
 		}
 
 		if (enc_white != 0 ) {
 			actual_state.color.blue += enc_map(enc_white);
 			actual_state.color.blue = clip(actual_state.color.blue,0.,1.);
+			unsetVirgin();
 		}
 	}
 	
@@ -178,11 +186,14 @@ void RushWash::handleEncoder(int enc_zoom, int enc_hue, int enc_sat, int enc_whi
 			hue += enc_map(enc_hue)*180.;
 			if (hue > 360.) hue -= 360.;
 			if (hue < 0.) hue += 360.;
+			unsetVirgin();
+
 		}
 	
 		if (enc_sat != 0 ) {
 			sat += enc_map(enc_sat);
 			sat = clip(sat,0.,1.);
+			unsetVirgin();
 		}
 		
 		RgbFColor * temp_color;
@@ -193,6 +204,7 @@ void RushWash::handleEncoder(int enc_zoom, int enc_hue, int enc_sat, int enc_whi
 		free(temp_color);
 
 		if (enc_white != 0 ) {
+			unsetVirgin();
 			actual_state.color.white += enc_map(enc_white);
 			actual_state.color.white = clip(actual_state.color.white,0.,1.);
 		}

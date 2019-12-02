@@ -57,6 +57,10 @@ const int COPY_MODE_NONE 	= 0;
 const int COPY_MODE_COLOR 	= 1;
 const int COPY_MODE_PTZ 	= 2;
 const int COPY_MODE_ALL 	= 3;
+const int COPY_MODE_SCENE 	= 4;
+
+const int DELETE_MODE_NONE 	= 0;
+const int DELETE_MODE_ON 	= 1;
 
 
 const int MENU_NONE			= 0;
@@ -100,13 +104,20 @@ signed int              test;
 char                    mode;
 char					copy_mode;
 char					color_mode;
+char					delete_mode;
 
 rush_t					copy_state;
+rush_t					clean_state;
+rush_t					scene[8][8];
+rush_t					copied_scene[8];
+
+CRGB					scene_color[8][2];
 int 					fixture_count;
 int                     selected_fixture;
 int                     selected_bank;
 int                     selected_scene;
 int                     selected_menu;
+char					in_chase;
 
 String					lee_string;
 int						lee_number;
@@ -129,8 +140,141 @@ float center_pad(int);
 void check_ad();
 void update_pixels();
 rgbw_t lee(int);
+void set_scene_color(int);
+
+//----------------------------------------------------------------------------------------
+//																		SAVE
+char f2int_highbyte(float f){ return char((f * 65533) / 256); } 
+char f2int_lowbyte(float f){ return char((int)(f * 65533) % 256); } 
+char f2char(float f){ return (char)(f * 255.); } 
+float int2f(char highbyte, char lowbyte){ int res = (highbyte << 8) | lowbyte; return (float)res/65533.; } 
+float char2f(char inbyte){ return (float)inbyte / 255.; } 
 
 
+
+void save_scene(int scene_idx) {
+	String filename;
+	String filename_base = "/B";
+	int num_bytes;
+	filename_base += selected_bank;
+	filename_base += "S";
+	filename_base += scene_idx;
+	filename_base += "F";
+	rush_t		st;
+	
+	uint8_t buf[14];
+	
+
+	for (int i = 0; i < fixture_count; i++) {
+		scene[scene_idx][i] = fixture[i].getState(); 
+		filename = filename_base + i;
+		filename += ".hex";
+		
+		File file = SPIFFS.open(filename, "w");
+		num_bytes = 0;
+		if (!file) {
+  			Serial.println("Error opening file for writing");
+		} else {
+			st = scene[scene_idx][i];
+			buf[0] 	= f2int_highbyte		(st.dim);
+			buf[1] 	= f2int_lowbyte			(st.dim);
+			buf[2] 	= f2char				(st.ptz.zoom);
+			buf[3] 	= f2int_highbyte		(st.ptz.pan);
+			buf[4]	= f2int_lowbyte			(st.ptz.pan);
+			buf[5]	= f2int_highbyte		(st.ptz.tilt);
+			buf[6] 	= f2int_lowbyte			(st.ptz.tilt);
+			buf[7]	= f2char				(st.color.red);
+			buf[8] 	= f2char				(st.color.green);
+			buf[9] 	= f2char				(st.color.blue);
+			buf[10] = f2char				(st.color.white);
+			buf[11]	= st.lee_filter >> 8;
+			buf[12]	= st.lee_filter % 256;
+			buf[13] = st.color_mode;
+		
+			num_bytes = file.write(buf, sizeof(buf));
+			if (num_bytes != sizeof(buf)) {
+				Serial.println("WRITE ERROR");
+			}
+		}
+		file.close();
+		Serial.print (num_bytes);
+		Serial.print(" bytes written to ");
+		Serial.println(filename);
+	}
+	set_scene_color(scene_idx);
+
+}
+
+//----------------------------------------------------------------------------------------
+//																		READ
+
+int read_scene(int scene_idx) {
+
+	int success;
+	String filename;
+	String filename_base = "/B";
+	int num_bytes;
+	filename_base += selected_bank;
+	filename_base += "S";
+	filename_base += scene_idx;
+	filename_base += "F";
+	success = 1;			// start from the principle we will succeed
+	rush_t		st;
+	char buf[14];
+
+	for (int i = 0; i < fixture_count; i++) {
+		filename = filename_base + i;
+		filename += ".hex";
+		
+		if (!SPIFFS.exists(filename)) {
+			Serial.print("ERROR: FILE DOES NOT EXIST: ");
+			Serial.println(filename);
+			success = 0;
+		} else {
+
+			File file = SPIFFS.open(filename, "rb");
+			file.setTimeout(0);
+
+			num_bytes = file.readBytes((char *)buf, sizeof(buf)); //cast changed from byte*
+			if (!(num_bytes == sizeof(buf))) {
+				Serial.print("ERROR: NOT ENOUGH BYTES ");
+				success = 0;
+			} else {
+				st.dim 			= 	int2f(	buf[0],		buf[1]	);
+				st.ptz.zoom 	= 	char2f(	buf[2]				);
+				st.ptz.pan		= 	int2f(	buf[3], 	buf[4]	);
+				st.ptz.tilt		= 	int2f(	buf[5], 	buf[6]	);
+				st.color.red	=	char2f(	buf[7]				);
+				st.color.green	=	char2f(	buf[8]				);
+				st.color.blue	=	char2f(	buf[9]				);
+				st.color.white	=	char2f(	buf[10]				);
+				st.lee_filter	= 	int2f(	buf[11], 	buf[12]	);
+				st.color_mode	=	char2f(	buf[13]				);
+				
+				scene[scene_idx][i] = st;
+
+			}
+
+			file.close();
+			Serial.print (num_bytes);
+			Serial.print(" bytes read fom ");
+			Serial.println(filename);
+		}
+	}
+	return success;
+}
+
+//----------------------------------------------------------------------------------------
+//																		print color
+
+void printColor(CRGB col) {
+	Serial.print(col.r,DEC);
+	Serial.print(" ");
+	Serial.print(col.g,DEC);
+	Serial.print(" ");
+	Serial.print(col.b,DEC);
+	Serial.println();
+}
 //----------------------------------------------------------------------------------------
 //																		pushbuttons
 void btn_press_copy(){
@@ -158,15 +302,43 @@ void btn_press_copy(){
 		
 		last_btn_press_copy = millis();
 	}
+	
+	if (mode == MODE_SCENE) {
+		switch (copy_mode) {
+			case COPY_MODE_NONE:
+				for (int fixt = 0; fixt < fixture_count; fixt++) {
+					copied_scene[fixt] = scene[selected_scene][fixt];
+				}
+				copy_mode = COPY_MODE_SCENE;
+				break;
+	
+			default:
+				copy_mode = COPY_MODE_NONE;
+		}
+		
+		last_btn_press_copy = millis();
+	}
+
 	update_display();
-    Serial.println("Copy");
 }
 
-void btn_press_delete(){
-	if (mode == MODE_FIXTURE) {
-		fixture[selected_fixture].init();
+void delete_scene(int sc) {
+	for (int i = 0; i < fixture_count; i++) {
+		fixture[i].init();
+		scene[sc][i] = fixture[i].getState();
+		set_scene_color(sc);
+		fixture[i].setState(scene[selected_scene][i]); 	// don't touch selected scene
 	}
-    Serial.println("Delete");
+}
+
+
+void btn_press_delete(){
+	if (delete_mode == DELETE_MODE_NONE){
+		copy_mode = COPY_MODE_NONE;
+		delete_mode = DELETE_MODE_ON;
+	} else {
+		delete_mode = DELETE_MODE_NONE;
+	}
 }
 
 
@@ -203,6 +375,7 @@ void btn_press_enter(){
 
 void check_buttons(){
     static long old_buttons;
+    static int old_mode;
     int temp;
     SPI.beginTransaction(SPISettings(80000, MSBFIRST, SPI_MODE0));
     digitalWrite(PIN_CS,LOW);
@@ -213,8 +386,16 @@ void check_buttons(){
     SPI.endTransaction();
     if (buttons_raw == old_buttons) return;
 
-    if (buttons_raw >> 13 & 1) mode = MODE_FIXTURE;
-    else mode = MODE_SCENE;
+	temp = (buttons_raw >> 13 & 1);				// mode switch
+	if (temp != old_mode) {
+		if (delete_mode) delete_mode = DELETE_MODE_NONE;
+		old_mode = temp;
+		if (temp){
+			 mode = MODE_FIXTURE;
+			 if (copy_mode == COPY_MODE_SCENE) copy_mode = COPY_MODE_NONE;
+		} else mode = MODE_SCENE;
+   		save_scene(selected_scene);
+   	}
     
     long triggers_press = old_buttons & ~buttons_raw;
     long triggers_release = ~old_buttons & buttons_raw;
@@ -228,37 +409,57 @@ void check_buttons(){
 
     for (int i = 0; i < 13; i++) {
         if (triggers_press & (1 << i)) {
-     //        Serial.print(i);             Serial.print(" ");
+     //       ----------------------------------------- FIXTURE MODE
              if (i > 0 && i < 9) {
                  if (mode == MODE_FIXTURE) {
 					temp = i-1;
                     if (temp > fixture_count-1) temp = fixture_count-1;
-                    
-                    switch (copy_mode) {
-                    	case COPY_MODE_NONE:
-							selected_fixture = temp;
-    	                	fixture[selected_fixture].flash(1);
-    	                	color_mode = fixture[selected_fixture].getColorMode();
-	        	            update_display();
-	        	            break;
-	        	            
-	        	        case COPY_MODE_COLOR:
-        	        		fixture[temp].setColor(copy_state.color);
-        	        		fixture[temp].setColorMode(copy_state.color_mode);
-        	        		fixture[temp].setLEE(copy_state.lee_filter);
-        	        		break;
-        	        		
-	        	        case COPY_MODE_PTZ:
-        	        		fixture[temp].setPTZ(copy_state.ptz);
-        	        		break;
+                    if (delete_mode == DELETE_MODE_ON) {
+                    	fixture[temp].init();
+                    	scene[selected_scene][temp] = fixture[temp].getState();
+                    } else {
+						switch (copy_mode) {
+							case COPY_MODE_NONE:
+								selected_fixture = temp;
+								fixture[selected_fixture].flash(1);
+								color_mode = fixture[selected_fixture].getColorMode();
+								update_display();
+								break;
+							
+							case COPY_MODE_COLOR:
+								fixture[temp].setColor(copy_state.color);
+								fixture[temp].setColorMode(copy_state.color_mode);
+								fixture[temp].setLEE(copy_state.lee_filter);
+								break;
+							
+							case COPY_MODE_PTZ:
+								fixture[temp].setPTZ(copy_state.ptz);
+								break;
 
-	        	        case COPY_MODE_ALL:
-        	        		fixture[temp].setState(copy_state);
+							case COPY_MODE_ALL:
+								fixture[temp].setState(copy_state);
+						}
 					}
 					
+     //       ----------------------------------------- SCENE MODE
                  } else if (mode == MODE_SCENE) {
-                     selected_scene = i-1;
-                     update_display();
+					if (delete_mode == DELETE_MODE_ON) {
+                    	delete_scene(i-1);
+                    } else if (copy_mode == COPY_MODE_SCENE) {
+                 		for (int fixt = 0; fixt < fixture_count; fixt++) {
+                 			scene[i-1][fixt] = copied_scene[fixt];
+                 		}
+                 		set_scene_color(i-1);
+                 	} else {
+						// save this scene first
+						save_scene(selected_scene);
+							// select new scene
+						selected_scene = i-1;
+						for (int i = 0; i < fixture_count; i++) {
+							fixture[i].setState(scene[selected_scene][i]);
+						}
+					}
+                    update_display();
                  }
             }
             if (i == 11) btn_press_copy();
@@ -327,35 +528,50 @@ void check_ad() {
 //																		pixels
 void update_pixels() { 
 	static long last_blink;
-	static boolean display_normal;
+	static boolean in_blink;
+	boolean do_blink;
+	CRGB blink_color;
 	
+	do_blink = false;
+	if (delete_mode != DELETE_MODE_NONE) {
+		do_blink = true;
+		blink_color = CRGB::Red;
+	} else if (mode == MODE_FIXTURE) {
+		if (copy_mode != COPY_MODE_NONE && copy_mode != COPY_MODE_SCENE) {
+			do_blink = true;
+			blink_color = CRGB::Green;
+		}
+	} else if (mode == MODE_SCENE) {
+		if (copy_mode == COPY_MODE_SCENE) {
+			do_blink = true;
+			blink_color = CRGB::Green;
+		}
+	} 
+	
+	
+	if (millis() - last_blink > 500) {
+		last_blink = millis();
+		if (!in_blink){ in_blink = true; } else {in_blink = false;}
+    }	
+    
+
     if (mode == MODE_FIXTURE || mode == MODE_SCENE) {
         FastLED.clear();
+     //       ----------------------------------------- FIXTURE MODE
 
         if (mode == MODE_FIXTURE) {
-        	if (copy_mode != COPY_MODE_NONE)  {
-        		if (millis() - last_blink > 500) {
-        			last_blink = millis();
-        			Serial.println(display_normal);
-        			if (display_normal) display_normal = false; 
-        			else display_normal = true;
-        		}	
-        	} else {display_normal = true;}
-        
-        
-        	if (display_normal) {
-	        	for (int i = 0; i < fixture_count; i++) {
+        	
+	 		for (int i = 0; i < fixture_count; i++) {
+				if (do_blink) {
+					pixels[7 - i] = blink_color;
+				} else {
     	    		pixels[7 - i] = fixture[i].getPixelColor();
-        		}
-        		pixels[8+selected_fixture] = COLOR_SELECTION; 
-        		
-			} else {
-	       		for (int i = 8; i < 8 + fixture_count; i++) {
-	       			if ((i-8) ==  selected_fixture) pixels[i] = fixture[selected_fixture].getPixelColor();
-    	    		else pixels[i] = CRGB::Green;
-        		}
+				}
         	}
+	 
+	  		if (in_blink) { pixels[7 - selected_fixture] = COLOR_SELECTION; }
 
+	
            // pixels[7-selected_fixture] = COLOR_SELECTION; 
         
         	pixels[16] = COLOR_SELECTION;				// dim
@@ -381,19 +597,57 @@ void update_pixels() {
         	}
         	        
         }
-    
+         //       ----------------------------------------- SCENE MODE
+
         if (mode == MODE_SCENE) {
-            pixels[7-selected_scene] = COLOR_SELECTION; 
-            pixels[8+selected_scene] = COLOR_SELECTION; 
-        
-            for (int i = 21; i < NUM_PIXELS; i++){
-                pixels[i] = CRGB::Gold; 
-            }
+        	for (int i = 0; i < 8; i++) {
+        		pixels[7-i] = scene_color[i][0];
+        		pixels[8+i] = scene_color[i][1];
+        	}
+        	
+   			if (in_blink) {
+				if (do_blink) {
+					for (int i = 0; i < 8; i++) {
+							pixels[7-i] = blink_color;
+							pixels[8+i] = blink_color;
+					}
+				}
+				
+	            pixels[7-selected_scene] = COLOR_SELECTION; 
+    	        pixels[8+selected_scene] = COLOR_SELECTION; 
+    	    }
+        	
+        	if (in_chase) {
+     	       for (int i = 21; i < NUM_PIXELS; i++){
+    	            pixels[i] = CRGB::Gold; 
+  	          }
+  	      	} else {
+  	      		 pixels[21]  = CRGB::Gold; 
+  	      		 pixels[NUM_PIXELS - 1]  = CRGB::Gold; 
+  	      	}
 
         }
     
         FastLED.show();
     }
+}
+
+//----------------------------------------------------------------------------------------
+//																		scene color
+void set_scene_color(int idx) {
+	CRGB temp;
+	temp = CRGB::Black;
+	for (int fixt = 0; fixt < fixture_count / 2; fixt++) {
+		temp += CRGB(scene[idx][fixt].color.red * 255 ,scene[idx][fixt].color.green * 255,scene[idx][fixt].color.blue * 255).fadeLightBy(256 / fixture_count * 2);
+		//printColor(temp);
+	}
+	scene_color[idx][0] = temp;
+	
+	temp = CRGB::Black;
+	for (int fixt = fixture_count / 2; fixt < fixture_count; fixt++) {
+		temp += CRGB(scene[idx][fixt].color.red * 255 ,scene[idx][fixt].color.green * 255,scene[idx][fixt].color.blue * 255).fadeLightBy(256 / fixture_count * 2);
+	}
+	scene_color[idx][1] = temp;
 }
 
 //----------------------------------------------------------------------------------------
@@ -715,23 +969,27 @@ void update_display() {
 	
 			display.setTextSize(2);				
 			display.setCursor(0,14);
-
-			if (copy_mode == COPY_MODE_COLOR) {display.print("COPY COLOR"); }
+			
+			if (delete_mode == DELETE_MODE_ON) {display.print("DELETE"); }
+			else if (copy_mode == COPY_MODE_COLOR) {display.print("COPY COLOR"); }
 			else if (copy_mode == COPY_MODE_PTZ) {display.print("COPY PTZ"); }
 			else if (copy_mode == COPY_MODE_ALL) {display.print("COPY ALL"); }
+			else if (copy_mode == COPY_MODE_SCENE) {display.print("COPY SCENE"); }
 			else if (color_mode == COLOR_MODE_LEE) {
-				display.setCursor(0,11);
-				display.setTextWrap(false);
-				display.setTextSize(1);
-				display.print("LEE");
-				display.setTextSize(2);
-				display.setCursor(0,18);    // number
-				display.print(lee_number);
-				display.setTextSize(1);
-				display.setCursor(40,17); // name
-				display.println(lee_string.substring(0,14));
-				display.setCursor(40,25); // name
-				display.println(lee_string.substring(14));
+				if (mode == MODE_FIXTURE) {
+					display.setCursor(0,11);
+					display.setTextWrap(false);
+					display.setTextSize(1);
+					display.print("LEE");
+					display.setTextSize(2);
+					display.setCursor(0,18);    // number
+					display.print(lee_number);
+					display.setTextSize(1);
+					display.setCursor(40,17); // name
+					display.println(lee_string.substring(0,14));
+					display.setCursor(40,25); // name
+					display.println(lee_string.substring(14));
+				}
 			}
 	
 			break;
@@ -779,6 +1037,7 @@ void update_display() {
 void check_ui_timeout() {
 	if (millis() - last_ui_interaction > UI_TIMEOUT) {
 		copy_mode = COPY_MODE_NONE;
+		delete_mode = DELETE_MODE_NONE;
 		selected_menu = 0;
 		update_display();
 	}
@@ -974,10 +1233,31 @@ void setup(){
     
     ESP32DMX.startOutput(DMX_SERIAL_OUTPUT_PIN);
 
+
+	
+	// clean, empty fixtures to start with
     for (int i = 0; i < fixture_count; i++) {
     	fixture[i].init();
     }
     
+    
+    // try to read files or create empty scenes
+    for (int sc = 0; sc < 8; sc++) {
+    	if (!read_scene(sc)) {
+	    	for (int i = 0; i < fixture_count; i++) {
+				scene[sc][i] = fixture[i].getState();
+			}
+		}
+		set_scene_color(sc);
+  	}
+    
+    selected_scene = 0;
+	for (int i = 0; i < fixture_count; i++) {
+		fixture[i].setState(scene[selected_scene][i]);
+	}
+	mode = MODE_SCENE;
+
+
     t.every(10, check_buttons);    
     t.every(25, service);    
 	t.every(100,check_encoder);

@@ -16,7 +16,7 @@ struct rush_t	{
 	ptz_t 	ptz;
 	rgbw_t	color;
 	float	dim;
-	int color_mode;
+	char color_mode;
 	int	lee_filter;
 };
 
@@ -29,6 +29,8 @@ class RushWash {
 		double		hue,sat;
 		char 		flashing;
 		int 		control_mode;
+		char 		is_virgin;
+
 
 		
 	public:
@@ -52,5 +54,6 @@ class RushWash {
 		int	getLEE();
 		void setColorMode(int);
 		void setLEE(int);
+		void unsetVirgin();
 
 };
