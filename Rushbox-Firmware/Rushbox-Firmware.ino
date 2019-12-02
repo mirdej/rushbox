@@ -263,7 +263,32 @@ int read_scene(int scene_idx) {
 	}
 	return success;
 }
+//----------------------------------------------------------------------------------------
+//																		load bank
 
+
+void load_bank() {
+// clean, empty fixtures to start with
+    for (int i = 0; i < fixture_count; i++) {
+    	fixture[i].init();
+    }
+    
+    
+    // try to read files or create empty scenes
+    for (int sc = 0; sc < 8; sc++) {
+    	if (!read_scene(sc)) {
+	    	for (int i = 0; i < fixture_count; i++) {
+				scene[sc][i] = fixture[i].getState();
+			}
+		}
+		set_scene_color(sc);
+  	}
+    
+    selected_scene = 0;
+	for (int i = 0; i < fixture_count; i++) {
+		fixture[i].setState(scene[selected_scene][i]);
+	}
+}
 //----------------------------------------------------------------------------------------
 //																		print color
 
@@ -577,9 +602,9 @@ void update_pixels() {
         	pixels[16] = COLOR_SELECTION;				// dim
         	switch (color_mode) {
 				case COLOR_MODE_HSV:
-		        	pixels[17] = COLOR_SELECTION;		//white
-		        	pixels[18] = COLOR_SELECTION;		//Sat
-		        	pixels[19] = COLOR_SELECTION;		//Hue
+		        	pixels[17] = CRGB::White;		//white
+		        	pixels[18] = CRGB::Fuchsia;		//Sat
+		        	pixels[19] = CRGB::Aqua;		//Hue
 		        	pixels[20] = COLOR_SELECTION;		//Zoom
 					break;
 				case COLOR_MODE_RGB:
@@ -711,6 +736,7 @@ void display_white_enc() {
 void check_encoder(){
 	signed int e[6];
 	signed long total;
+	static int last_bank;
 	
 	for (int i = 0; i < 6; i++) {
 		e[i] = encoder[i].getCount();
@@ -758,7 +784,11 @@ void check_encoder(){
 		if (e[0] < 0) selected_bank--;
 		if (selected_bank < 0 ) selected_bank = 0;
 		if (selected_bank > BANK_COUNT) selected_bank = BANK_COUNT;
-		update_display();
+		if (selected_bank != last_bank) {
+			load_bank();
+			last_bank = selected_bank;
+			update_display();
+		}
 	}
 
 	for (int i = 0; i < 6; i++) {
@@ -831,6 +861,7 @@ void restart() {
 	delay(1000);
 	ESP.restart();
 }
+
 
 //----------------------------------------------------------------------------------------
 //																		harware test
@@ -1235,26 +1266,7 @@ void setup(){
 
 
 	
-	// clean, empty fixtures to start with
-    for (int i = 0; i < fixture_count; i++) {
-    	fixture[i].init();
-    }
-    
-    
-    // try to read files or create empty scenes
-    for (int sc = 0; sc < 8; sc++) {
-    	if (!read_scene(sc)) {
-	    	for (int i = 0; i < fixture_count; i++) {
-				scene[sc][i] = fixture[i].getState();
-			}
-		}
-		set_scene_color(sc);
-  	}
-    
-    selected_scene = 0;
-	for (int i = 0; i < fixture_count; i++) {
-		fixture[i].setState(scene[selected_scene][i]);
-	}
+	load_bank();
 	mode = MODE_SCENE;
 
 

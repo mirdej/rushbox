@@ -33,6 +33,7 @@ float enc_map(int in) {
 
 RushWash::RushWash() {
 	address = 0;
+	control_mode = CONTROL_MODE_PT;
 }
 //----------------------------------------------------------------------------------------
 CRGB RushWash::getPixelColor(){
@@ -137,6 +138,8 @@ void RushWash::init() {
 	actual_state.dim = 1;
 	actual_state.lee_filter = 0;
 	is_virgin = 1;
+	ax = M_PI_2;
+	ay = M_PI_2;
 	setColor(actual_state.color);
 }
 
@@ -220,30 +223,51 @@ void RushWash::handleEncoder(int enc_zoom, int enc_hue, int enc_sat, int enc_whi
 //----------------------------------------------------------------------------------------
 
 void RushWash::nudge(float dx, float dy) {
-
+	
 	if (control_mode == CONTROL_MODE_XY) {
-		ax += dx;
-		ax = clip (ax, 0 , M_PI);
-		ay += dy;
-		ay = clip (ay, 0, M_PI);
+		ay -= dx;
+		ay = clip (ay, 0 , M_PI);
+		ax -= dy;
+		ax = clip (ax, 0, M_PI);
+		
 	
 		look_at.x = cos(ay);
 		look_at.y =	cos(ax) * sin (ay);
 		look_at.z = sin(ax) * sin (ay);
-
-		float pan = atan2(look_at.y, look_at.x);
+/*
+		Serial.print("AX ");
+		Serial.print(ax);
+		Serial.print("AY ");
+		Serial.print(ay);
+		Serial.print("Lookat ");
+		Serial.print(look_at.x);
+		Serial.print("  ");
+		Serial.print(look_at.y);
+		Serial.print("  ");
+		Serial.print(look_at.z);
+*/
+		float pan = atan2(look_at.x, look_at.y);
+		float tilt =  atan2( sqrt( pow(look_at.x,2) + pow(look_at.y,2)),(look_at.z - 0.364));
+/*
+		Serial.print("PT ");
+		Serial.print(pan);
+		Serial.print("  ");
+		Serial.print(tilt);
+		Serial.println();
+*/
 		// gives us -PI to +PI	
 		// pan range 0. - 1. is 540 degrees in total. 
 		// 360 degrees are 0.6666666, so we want -PI = 0.16666 and PI = 0.8333333
 		pan = mapf (pan,-M_PI, M_PI, 0.1666, 0.83333);
 	
-		float tilt =  atan2((look_at.z - 0.364), sqrt( pow(look_at.x,2) + pow(look_at.y,2)) );
 		// tilt range 0. - 1. is 220 degrees 
-		tilt = mapf (tilt, -0.61111 * M_PI, 0.61111 * PI, 0., 1.);
+		tilt = mapf (tilt, -0.61111 * M_PI, 0.61111 * M_PI, 0., 1.);
 		clip (tilt, 0., 1.);
-	
+
+
 		actual_state.ptz.pan = pan;
 		actual_state.ptz.tilt = tilt;
+	
 	} else {	
 		actual_state.ptz.pan 	+= dx;
 		actual_state.ptz.tilt 	+= dy;
