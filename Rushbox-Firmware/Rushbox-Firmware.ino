@@ -29,6 +29,7 @@
 #include <ESP32Encoder.h>
 #include <LXESP32DMX.h>
 #include "RushWash.h"
+#include "Colorspace.h"
 
 // ..................................................................................... PIN mapping
 
@@ -36,21 +37,38 @@ const int PIN_STICK_X   =   39;
 const int PIN_STICK_Y   =   34;
 const int PIN_MASTER    =   36;
 const int PIN_PIXELS    =   13;
-const int PIN_ENCODERS[]    = {26,27,35,32,33,25,14,12,3,1,15,4};
+const int PIN_ENCODERS[]    = {26,27, 35,32, 25,33, 12,14, 1,3, 4,15};
 const int PIN_CS            = 5;
 
+
+const int DMX_SERIAL_OUTPUT_PIN = 17;
 const int NUM_PIXELS    =   26;
 
 // ..................................................................................... Constants
+
+#define COLOR_SELECTION CRGB::Gray
 
 const int MODE_UNKNOWN  = 0;
 const int MODE_FIXTURE  = 1;
 const int MODE_SCENE    = 2;
 const int MODE_TEST     = 3;
 
+const int COPY_MODE_NONE 	= 0;
+const int COPY_MODE_COLOR 	= 1;
+const int COPY_MODE_PTZ 	= 2;
+const int COPY_MODE_ALL 	= 3;
 
 
+const int MENU_NONE			= 0;
+const int MENU_COLORS_HSV	= 1;
+const int MENU_COLORS_RGB	= 2;
+const int MENU_COLORS_LEE	= 3;
 
+const int POT_PAD			 = 50;
+const float  POT_DIV		= 4000.;
+
+const int BANK_COUNT			= 15;
+int menu_items_count = 4;
 // ..................................................................................... SCREEN
 
 
@@ -61,7 +79,7 @@ Adafruit_SSD1306 		display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ..................................................................................... WIFI STUFF 
 #define WIFI_TIMEOUT		4000
-String hostname;
+String 	hostname;
 
 
 //========================================================================================
@@ -71,29 +89,83 @@ Preferences                             preferences;
 Timer                                   t;
 AsyncWebServer                          server(80);
 CRGB                                    pixels[NUM_PIXELS];
-ESP32Encoder                            encoder;
+ESP32Encoder                            encoder[6];
 
-RushWash                fixture;
+RushWash                fixture[8];
 
 int                     buttons_raw;
 signed int              test;
 	char buf[] = "Hello this is an empty message with, a comma in it";
 
 char                    mode;
+char					copy_mode;
+char					color_mode;
+
+rush_t					copy_state;
 int 					fixture_count;
 int                     selected_fixture;
 int                     selected_bank;
 int                     selected_scene;
+int                     selected_menu;
+
+String					lee_string;
+int						lee_number;
 
 float master = 1.;
+
+long		last_ui_interaction;
+long 		last_btn_press_copy;
+const int 	COPY_BTN_TIMEOUT = 1000;
+const int 	UI_TIMEOUT = 5000;
+
+//========================================================================================
+//----------------------------------------------------------------------------------------
+//																				PROTOTYPES
+
+void update_display();
+void btn_press_copy();
+void check_buttons();
+float center_pad(int);
+void check_ad();
+void update_pixels();
+rgbw_t lee(int);
+
 
 //----------------------------------------------------------------------------------------
 //																		pushbuttons
 void btn_press_copy(){
+	
+	if (mode == MODE_FIXTURE) {
+		switch (copy_mode) {
+			case COPY_MODE_NONE:
+				copy_state = fixture[selected_fixture].getState();
+				copy_mode = COPY_MODE_COLOR;
+				break;
+				
+			case COPY_MODE_COLOR:
+				if (millis()-last_btn_press_copy > COPY_BTN_TIMEOUT) {	copy_mode = COPY_MODE_NONE; }
+				else {													copy_mode = COPY_MODE_PTZ;	}
+				break;
+				
+			case COPY_MODE_PTZ:
+				if (millis()-last_btn_press_copy > COPY_BTN_TIMEOUT) {	copy_mode = COPY_MODE_NONE; }
+				else {													copy_mode = COPY_MODE_ALL;	}
+				break;
+
+			case COPY_MODE_ALL:
+				copy_mode = COPY_MODE_NONE;
+		}
+		
+		last_btn_press_copy = millis();
+	}
+	update_display();
     Serial.println("Copy");
 }
 
 void btn_press_delete(){
+	if (mode == MODE_FIXTURE) {
+		fixture[selected_fixture].init();
+	}
     Serial.println("Delete");
 }
 
@@ -104,12 +176,34 @@ void btn_press_start(){
 
 
 void btn_press_enter(){
-    Serial.println("Enter");
+
+	switch(selected_menu) {
+		case MENU_NONE:
+			break;
+			
+		case MENU_COLORS_HSV:
+			color_mode = COLOR_MODE_HSV;
+			fixture[selected_fixture].setColorMode(color_mode);
+			break;
+			
+		case MENU_COLORS_RGB:
+			color_mode = COLOR_MODE_RGB;
+			fixture[selected_fixture].setColorMode(color_mode);
+			break;
+			
+		case MENU_COLORS_LEE:
+			color_mode = COLOR_MODE_LEE;
+			fixture[selected_fixture].setColorMode(color_mode);
+			break;
+	}
+	
+	update_display();
 }
 
 
 void check_buttons(){
     static long old_buttons;
+    int temp;
     SPI.beginTransaction(SPISettings(80000, MSBFIRST, SPI_MODE0));
     digitalWrite(PIN_CS,LOW);
     delay(1);
@@ -122,21 +216,49 @@ void check_buttons(){
     if (buttons_raw >> 13 & 1) mode = MODE_FIXTURE;
     else mode = MODE_SCENE;
     
-    long triggers = old_buttons & ~buttons_raw;
+    long triggers_press = old_buttons & ~buttons_raw;
+    long triggers_release = ~old_buttons & buttons_raw;
     old_buttons = buttons_raw;
-    if (triggers == 0) return;
     
-    //Serial.println(triggers,BIN);
-    //Serial.print("Triggers: ");
+    if (triggers_press == 0 && triggers_release == 0) return;
+    
+
+	last_ui_interaction = millis();
+
+
     for (int i = 0; i < 13; i++) {
-        if (triggers & (1 << i)) {
-             Serial.print(i);             Serial.print(" ");
+        if (triggers_press & (1 << i)) {
+     //        Serial.print(i);             Serial.print(" ");
              if (i > 0 && i < 9) {
                  if (mode == MODE_FIXTURE) {
-                    selected_fixture = i-1;
-                    selected_fixture %= fixture_count;
+					temp = i-1;
+                    if (temp > fixture_count-1) temp = fixture_count-1;
+                    
+                    switch (copy_mode) {
+                    	case COPY_MODE_NONE:
+							selected_fixture = temp;
+    	                	fixture[selected_fixture].flash(1);
+    	                	color_mode = fixture[selected_fixture].getColorMode();
+	        	            update_display();
+	        	            break;
+	        	            
+	        	        case COPY_MODE_COLOR:
+        	        		fixture[temp].setColor(copy_state.color);
+        	        		fixture[temp].setColorMode(copy_state.color_mode);
+        	        		fixture[temp].setLEE(copy_state.lee_filter);
+        	        		break;
+        	        		
+	        	        case COPY_MODE_PTZ:
+        	        		fixture[temp].setPTZ(copy_state.ptz);
+        	        		break;
+
+	        	        case COPY_MODE_ALL:
+        	        		fixture[temp].setState(copy_state);
+					}
+					
                  } else if (mode == MODE_SCENE) {
                      selected_scene = i-1;
+                     update_display();
                  }
             }
             if (i == 11) btn_press_copy();
@@ -145,28 +267,124 @@ void check_buttons(){
             if (i == 9) btn_press_enter();
         }
     }
-    Serial.println();
     
+    for (int i = 0; i < 13; i++) {
+        if (triggers_release & (1 << i)) {
+             if (i > 0 && i < 9) {
+                 if (mode == MODE_FIXTURE) {
+                 	int fix = i-1;
+                    fixture[i-1].flash(0);
+                    if (fix > fixture_count-1) fix = fixture_count-1;
+                    fixture[fix].flash(0);
+                 } else if (mode == MODE_SCENE) {
+                 }
+            }
+          }
+    }    
 }
+//----------------------------------------------------------------------------------------
+//																		pots
+
+
+float center_pad(int n) {
+	float d = 0.;
+	if (n < (2048 - POT_PAD)) { 
+		d = (2048 - POT_PAD - n) /  POT_DIV; 
+	}
+	if (n > (2048 + POT_PAD)) { 
+		d = (n - 2048 - POT_PAD) /  POT_DIV; 
+	}
+	d = abs(d*d*d);
+	if (n < 2048) d = 0.-d;
+	return d / 10.;
+}
+
+
+void check_ad() {
+	int temp;
+	static int master_avg;
+	float f;
+
+	temp = analogRead(PIN_MASTER);
+	temp = (3 * master_avg + temp ) / 4;
+	master_avg = temp;
+	
+	temp = temp - 47;
+	if (temp < 0) temp = 0;
+	
+	f = (float)temp / 4000.;
+	if (f > 1.) f = 1.;
+	f = 1. - f;
+	
+	master = f;
+	
+	if (mode == MODE_FIXTURE) {
+		fixture[selected_fixture].nudge(center_pad(4095-analogRead(PIN_STICK_X)),center_pad(analogRead(PIN_STICK_Y)));
+	}	
+}
+
 //----------------------------------------------------------------------------------------
 //																		pixels
 void update_pixels() { 
+	static long last_blink;
+	static boolean display_normal;
+	
     if (mode == MODE_FIXTURE || mode == MODE_SCENE) {
         FastLED.clear();
 
         if (mode == MODE_FIXTURE) {
-            pixels[7-selected_fixture] = CRGB::Gainsboro; 
-            pixels[8+selected_fixture] = CRGB::Gainsboro; 
+        	if (copy_mode != COPY_MODE_NONE)  {
+        		if (millis() - last_blink > 500) {
+        			last_blink = millis();
+        			Serial.println(display_normal);
+        			if (display_normal) display_normal = false; 
+        			else display_normal = true;
+        		}	
+        	} else {display_normal = true;}
         
-            for (int i = 16; i < 21; i++){
-                pixels[i] = CRGB::Gold; 
-            }
         
+        	if (display_normal) {
+	        	for (int i = 0; i < fixture_count; i++) {
+    	    		pixels[7 - i] = fixture[i].getPixelColor();
+        		}
+        		pixels[8+selected_fixture] = COLOR_SELECTION; 
+        		
+			} else {
+	       		for (int i = 8; i < 8 + fixture_count; i++) {
+	       			if ((i-8) ==  selected_fixture) pixels[i] = fixture[selected_fixture].getPixelColor();
+    	    		else pixels[i] = CRGB::Green;
+        		}
+        	}
+
+           // pixels[7-selected_fixture] = COLOR_SELECTION; 
+        
+        	pixels[16] = COLOR_SELECTION;				// dim
+        	switch (color_mode) {
+				case COLOR_MODE_HSV:
+		        	pixels[17] = COLOR_SELECTION;		//white
+		        	pixels[18] = COLOR_SELECTION;		//Sat
+		        	pixels[19] = COLOR_SELECTION;		//Hue
+		        	pixels[20] = COLOR_SELECTION;		//Zoom
+					break;
+				case COLOR_MODE_RGB:
+		        	pixels[17] = CRGB::Blue;
+		        	pixels[18] = CRGB::Green;
+		        	pixels[19] = CRGB::Red;
+		        	pixels[20] = COLOR_SELECTION;
+					break;
+				case COLOR_MODE_LEE:
+		        	pixels[17] = CRGB::Black;
+		        	pixels[18] = CRGB::Black;
+		        	pixels[19] = CRGB::Gold;
+		        	pixels[20] = COLOR_SELECTION;
+					break;
+        	}
+        	        
         }
     
         if (mode == MODE_SCENE) {
-            pixels[7-selected_scene] = CRGB::Gainsboro; 
-            pixels[8+selected_scene] = CRGB::Gainsboro; 
+            pixels[7-selected_scene] = COLOR_SELECTION; 
+            pixels[8+selected_scene] = COLOR_SELECTION; 
         
             for (int i = 21; i < NUM_PIXELS; i++){
                 pixels[i] = CRGB::Gold; 
@@ -181,12 +399,10 @@ void update_pixels() {
 //----------------------------------------------------------------------------------------
 //																		LEE
 
-void lee(int i) {
-    display.clearDisplay();
-	display.setCursor(0,0);
-	display.setTextWrap(false);
-    display.setTextSize(1);
-    display.print("LEE");
+rgbw_t lee(int i) {	
+
+	rgbw_t color;
+	int r,g,b;
    // display.drawLine(0, 31, test/2, 20, WHITE);
 
 	File file = SPIFFS.open("/lee2rgb.csv", "r");
@@ -196,48 +412,108 @@ void lee(int i) {
 	int line = 0;
 	while(file.available()){
 		if (line == i) {
-			display.setTextSize(2);
-			display.setCursor(0,14);    // number
-			display.print(file.readStringUntil(','));
-			display.setTextSize(1);
-			display.setCursor(40,12); // name
-			display.println(file.readStringUntil(','));
-			display.setCursor(40,22); // r
-			display.print(file.readStringUntil(','));
-			 display.print( " ");   	    	// g
-			display.print(file.readStringUntil(','));
-			 display.print( " "); // b
-			display.print(file.readStringUntil('\n'));
+			lee_number = file.readStringUntil(',').toInt();
+			lee_string = file.readStringUntil(',');
+			r =file.readStringUntil(',').toInt();
+			g = file.readStringUntil(',').toInt();
+			b = file.readStringUntil('\n').toInt();
 			line++;
+			color.red = (float)r/255.; 
+			color.green = (float)g/255.;
+			color.blue=(float)b/255.;
+			color.white = 0.;
 	   } else {
 		file.readStringUntil('\n');
 		line++;
 	   }
 	}
-	Serial.println();
 	file.close();
-	display.display();
+	return color;
 }
+	
 //----------------------------------------------------------------------------------------
 //																		encoders
-void check_encoder(){
-    static int last_line = 5000;
-    char dir = encoder.getCount() > 0;
-    float f = (float)encoder.getCount() / 2.;
+
+int encoder_accel(int i){
+    float f = (float)i / 2.;
     f = abs(f);
     if (f == 0.5) f = 1;
     f = pow(f,2);
     signed int diff = round(f);
-    if (!dir) diff = -diff;
-    test = test + diff;
-    if (test > 255) test = 255;
-    if (test < 0) test = 0;
-    encoder.setCount(0);
-	if (test != last_line) {
-        last_line = test;
-		lee(test);
+    if (i < 0) diff = -diff;
+	return diff;
+}
+
+void display_white_enc() {
+	if (digitalRead(12)) {
+		display.drawPixel(127, 0, WHITE);
+	} else {
+		display.drawPixel(127, 0, BLACK);
+	}
+	display.display();
+}
+
+
+void check_encoder(){
+	signed int e[6];
+	signed long total;
+	
+	for (int i = 0; i < 6; i++) {
+		e[i] = encoder[i].getCount();
+		total += abs(e[i]);
+	}
+		
+	if (total == 0) return;
+
+	//last_ui_interaction = millis();
+
+	if (mode == MODE_FIXTURE) {
+		
+		if (copy_mode == COPY_MODE_NONE) {
+			fixture[selected_fixture].handleEncoder(e[0], e[1], e[2], e[3], e[4]); 
+			
+			if (color_mode == COLOR_MODE_LEE) {
+				if (e[1] != 0) {
+					selected_menu = MENU_NONE;
+					signed int temp = fixture[selected_fixture].getLEE();
+					temp += encoder_accel(e[1]);
+					if (temp < 0) temp += 151;
+					if (temp > 151) temp -= 151;
+					fixture[selected_fixture].setColor(lee(temp));
+					fixture[selected_fixture].setLEE(temp);
+					update_display();
+				}
+			}
+			
+		}
+		
+		if (e[5] != 0) {
+			last_ui_interaction = millis();
+			copy_mode = COPY_MODE_NONE;
+			if (e[5] > 0) selected_menu++;
+			if (e[5] < 0) selected_menu--;
+			if (selected_menu < 0 ) selected_menu = 0;
+			if (selected_menu > menu_items_count -1) selected_menu =  menu_items_count - 1;
+			update_display();
+		}
+		
+	}
+		
+	if (mode == MODE_SCENE) {
+		if (e[0] > 0) selected_bank++;
+		if (e[0] < 0) selected_bank--;
+		if (selected_bank < 0 ) selected_bank = 0;
+		if (selected_bank > BANK_COUNT) selected_bank = BANK_COUNT;
+		update_display();
+	}
+
+	for (int i = 0; i < 6; i++) {
+		encoder[i].setCount(0);
 	}
 }
+
+
+
  
 //----------------------------------------------------------------------------------------
 //																file functions
@@ -338,8 +614,8 @@ void hardware_test() {
         }
         if (TEST_ENCOODER_0) {
         	display.setTextSize(2);
-        	char dir = encoder.getCount() > 0;
-        	float f = (float)encoder.getCount() / 2.;
+        	char dir = encoder[0].getCount() > 0;
+        	float f = (float)encoder[0].getCount() / 2.;
         	f = abs(f);
         	if (f == 0.5) f = 1;
         	f = pow(f,2);
@@ -350,7 +626,7 @@ void hardware_test() {
         	if (test < 0) test = 0;
             display.print(test,DEC);
             display.drawLine(0, 20, test/2, 20, WHITE);
-            encoder.setCount(0);
+            encoder[0].setCount(0);
             display.println();
         }
         
@@ -392,12 +668,17 @@ String string_to_addresses(String  input) {
 		// printf( " %s\n", token );
 		addr = atoi(token);
 		response += addr;
+		if (addr < 0) addr = 0;
+		if (addr > 496) addr = 496;
 		response += ",";
 		
 		Serial.print("Fixture ");
 		Serial.print(i,DEC);
 		Serial.print(" ");
 		Serial.println(addr,DEC);
+		
+		fixture[i].setAddress(addr);
+		
 		token = strtok(NULL, s);
 		i++;
 		if (i > 7) break;
@@ -415,45 +696,103 @@ String string_to_addresses(String  input) {
 	return response;
 }
 
-//========================================================================================
-//----------------------------------------------------------------------------------------
-//																				service dmx
-
-void service() {
-    fixture.update(master);
-    update_pixels();
-}
-
-
-//========================================================================================
-//----------------------------------------------------------------------------------------
-//																				SETUP
-
-void setup(){
-
-	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-	display.setRotation(2); 
-
-    FastLED.addLeds<NEOPIXEL, PIN_PIXELS>(pixels, NUM_PIXELS);
-	    
-    for (int i = 0; i < 12; i++) {
-        pinMode(PIN_ENCODERS[i],INPUT_PULLUP);
-    }
-    
-    encoder.attachHalfQuad(4, 15);
-
-    pinMode(PIN_CS, OUTPUT);
-    digitalWrite(PIN_CS,HIGH);
-    SPI.begin();
-    
- 	display.clearDisplay();
+void update_display() {
+	display.clearDisplay();
 	display.setTextSize(1);				
 	display.setTextColor(WHITE);
-	display.setCursor(14,0);		
+
+
+	switch(selected_menu) {
+		case MENU_NONE:
+		
+			display.setCursor(0,0);
+			display.print("BNK: ");
+			display.write((char)selected_bank + 65);
+			display.print(" SCN: ");
+			display.print(selected_scene + 1);
+			display.print(" FXT: ");
+			display.print(selected_fixture + 1);
+	
+			display.setTextSize(2);				
+			display.setCursor(0,14);
+
+			if (copy_mode == COPY_MODE_COLOR) {display.print("COPY COLOR"); }
+			else if (copy_mode == COPY_MODE_PTZ) {display.print("COPY PTZ"); }
+			else if (copy_mode == COPY_MODE_ALL) {display.print("COPY ALL"); }
+			else if (color_mode == COLOR_MODE_LEE) {
+				display.setCursor(0,11);
+				display.setTextWrap(false);
+				display.setTextSize(1);
+				display.print("LEE");
+				display.setTextSize(2);
+				display.setCursor(0,18);    // number
+				display.print(lee_number);
+				display.setTextSize(1);
+				display.setCursor(40,17); // name
+				display.println(lee_string.substring(0,14));
+				display.setCursor(40,25); // name
+				display.println(lee_string.substring(14));
+			}
+	
+			break;
+			
+		case MENU_COLORS_HSV:
+			display.setCursor(0,0);
+			display.print("Color Mode:");
+	
+			display.setTextSize(2);				
+			display.setCursor(0,14);
+
+			display.print("HSV");
+			if (color_mode == COLOR_MODE_HSV) display.print(" (X)");
+			break;
+			
+		case MENU_COLORS_RGB:
+			display.setCursor(0,0);
+			display.print("Color Mode:");
+	
+			display.setTextSize(2);				
+			display.setCursor(0,14);
+			display.print("RGB");
+			if (color_mode == COLOR_MODE_RGB) display.print(" (X)");
+			break;
+			
+		case MENU_COLORS_LEE:
+			display.setCursor(0,0);
+			display.print("Color Mode:");
+	
+			display.setTextSize(2);				
+			display.setCursor(0,14);
+			display.print("LEE");
+			if (color_mode == COLOR_MODE_LEE) display.print(" (X)");
+			break;
+	}
+
+	display.drawLine(0,8,128,8,WHITE);
+
+	display.display();
+}
+
+//----------------------------------------------------------------------------------------
+//																		UI Timeout
+
+void check_ui_timeout() {
+	if (millis() - last_ui_interaction > UI_TIMEOUT) {
+		copy_mode = COPY_MODE_NONE;
+		selected_menu = 0;
+		update_display();
+	}
+}
+
+void intro() {
+	display.clearDisplay();
+	display.setTextSize(1);				
+	display.setTextColor(WHITE);
+	display.setCursor(26,6);		
 	display.println(F("[ a n y m a ]"));
-	display.setCursor(0,16);		
+	display.setCursor(24,16);		
 	display.setTextSize(2);				
-	display.println(F(" RUSHBOX"));
+	display.println(F("RUSHBOX"));
 	display.display();
 	delay(1000);
 /*
@@ -466,6 +805,47 @@ void setup(){
 	display.display();
 	delay(1000);
 */
+}
+
+//========================================================================================
+//----------------------------------------------------------------------------------------
+//																				service dmx
+
+void service() {
+
+	check_ad();
+	
+	for (int i = 0; i < fixture_count; i++) {
+	    fixture[i].update(master);
+	}
+    update_pixels();
+}
+
+
+//========================================================================================
+//----------------------------------------------------------------------------------------
+//																				SETUP
+
+void setup(){
+
+	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+	display.setRotation(2); 
+	intro();
+
+    FastLED.addLeds<NEOPIXEL, PIN_PIXELS>(pixels, NUM_PIXELS);
+	    
+    for (int i = 0; i < 12; i++) {
+        pinMode(PIN_ENCODERS[i],INPUT_PULLUP);
+    }
+    
+    for (int i = 0; i < 6; i++) {
+	    encoder[i].attachHalfQuad(PIN_ENCODERS[2*i], PIN_ENCODERS[2*i+1]);
+	}
+
+    pinMode(PIN_CS, OUTPUT);
+    digitalWrite(PIN_CS,HIGH);
+    SPI.begin();
+    
 
     Serial.begin(115200);
  
@@ -592,10 +972,19 @@ void setup(){
         server.begin();
     }
     
+    ESP32DMX.startOutput(DMX_SERIAL_OUTPUT_PIN);
+
+    for (int i = 0; i < fixture_count; i++) {
+    	fixture[i].init();
+    }
+    
     t.every(10, check_buttons);    
     t.every(25, service);    
-//    t.every(100,check_encoder);
+	t.every(100,check_encoder);
     t.every(100, hardware_test);
+    t.every(200, display_white_enc);
+    t.every(1000, update_display);
+    t.every(1000,check_ui_timeout);
 }
 
 
